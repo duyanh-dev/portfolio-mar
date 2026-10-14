@@ -216,6 +216,8 @@ if(!reduce){
 var card=$('#card'),strap=$('#strap'),stitch=$('#stitch'),flipEl=$('#flip');
 var anc={x:0,y:-700,s:1},S=1,RES=310,MOB=false,shown=false,flipped=false;
 var N=9,L=190,RL=300,MAXS=2.2,sScale=1,seg,pts=[],C,W=0,H=0,ax=0,dragging=false,ptr={x:0,y:0},off={x:0,y:0},lastW=0,all=[],asleep=false,lx=0,ly=0;
+/* fx: chuyển động theo cuộn. bob = giật dây, sway = đu ngang theo tiến độ cuộn */
+var fx={bob:0,sway:0},swayP=0,swayAmp=0,meActive=false,sv=0,lastSY=scrollY;
 
 function vw(){return document.documentElement.clientWidth}
 function metrics(){
@@ -224,20 +226,27 @@ function metrics(){
   RES=parseFloat(cs.getPropertyValue('--res'));if(isNaN(RES))RES=310;
   W=vw();H=innerHeight;lastW=W;MOB=W<760;
 }
+/* biên độ đu: đúng bằng khoảng trống giữa chữ "Về mình" và cột treo thẻ (desktop) */
+function calcAmp(){
+  var t=$('.me-txt');
+  if(!t||MOB){swayAmp=0;return}
+  var free=(W-RES/2)-125*S-t.getBoundingClientRect().right-14;
+  swayAmp=Math.max(0,Math.min(240,free));
+}
 function mk(x,y,w){return{x:x,y:y,px:x,py:y,w:w}}
 function init(){
   metrics();
-  /* SP: thẻ treo giữa màn hình. Desktop/tablet: tâm cột chừa chỗ (cùng biến --res với CSS) */
   ax=anc.x=MOB?W/2:W-RES/2;
   anc.s=S;L=190*S;
   RL=S>=1?Math.min(300,H*.32):(S>=.8?Math.min(220,H*.26):Math.min(120,H*.16));
   seg=RL/(N-1);
-  MAXS=Math.max(2.2,(H*.82-L)/RL);   /* dây giãn tối đa: kéo được rất sâu */
+  MAXS=Math.max(2.2,(H*.82-L)/RL);
   sScale=1;
   pts=[];
   for(var i=0;i<N;i++)pts.push(mk(ax+i*.4,anc.y+i*.3,i===0?0:1));
   C=mk(ax+3,anc.y+4,.35);
   all=pts.concat([C]);asleep=false;
+  calcAmp();
 }
 function solve(a,b,d){
   var dx=b.x-a.x,dy=b.y-a.y,len=Math.sqrt(dx*dx+dy*dy)||1e-4,diff=(len-d)/len,s=a.w+b.w;
@@ -247,38 +256,57 @@ function solve(a,b,d){
 }
 function step(){
   if(W&&Math.abs(vw()-lastW)>2)init();
-  ax=anc.x;
-  if(asleep&&!dragging&&anc.x===lx&&anc.y===ly)return;
-  lx=anc.x;ly=anc.y;asleep=false;
+
+  /* vận tốc cuộn đã làm mượt: mỗi khung hình chỉ một lực nhẹ, không giật theo từng sự kiện scroll */
+  var sy=scrollY;sv+=((sy-lastSY)-sv)*.18;lastSY=sy;
+  var wind=(shown&&!dragging)?Math.max(-1,Math.min(1,sv*.04)):0;
+
+  /* cảnh "Về mình": đu ngang (1 chu kỳ / 2 chương) + dây co giãn (gấp đôi tần số) => quỹ đạo hình số 8 */
+  var scene=meActive&&shown,ph=swayP*Math.PI*4,tx0=0,kt=1;
+  if(scene){
+    tx0=MOB?Math.sin(ph)*W*.2:-swayAmp*(.5-.5*Math.cos(ph));
+    kt=1+.26*(.5-.5*Math.cos(ph*2));
+  }
+  fx.sway+=(tx0-fx.sway)*.12;
+  if(Math.abs(tx0-fx.sway)<.05)fx.sway=tx0;
+
+  var ex=anc.x+fx.sway,ey=anc.y+fx.bob;
+  if(scene||Math.abs(wind)>.02)asleep=false;
+  if(asleep&&!dragging&&ex===lx&&ey===ly)return;
+  lx=ex;ly=ey;asleep=false;ax=ex;
+
   for(var i=0;i<all.length;i++){
     var p=all[i];if(!p.w)continue;
     if(p===C&&dragging)continue;
     var vx=(p.x-p.px)*.987,vy=(p.y-p.py)*.987;
     p.px=p.x;p.py=p.y;p.x+=vx;p.y+=vy+(p===C?.75:.5);
   }
-  var kt=1;
+  if(wind){
+    for(var q=N-4;q<N;q++)pts[q].x+=wind*(.35+(q-(N-4))*.2);
+    C.x+=wind*1.3;
+  }
   if(dragging){
     var tx=ptr.x-off.x,ty=ptr.y-off.y;
     tx=Math.max(24,Math.min(W-24,tx));ty=Math.max(L,Math.min(H-L*.55,ty));
-    var dx=tx-ax,dy=ty-anc.y,d=Math.sqrt(dx*dx+dy*dy),rmax=RL*MAXS+L;
-    if(d>rmax){tx=ax+dx/d*rmax;ty=anc.y+dy/d*rmax;d=rmax}
-    kt=Math.max(1,Math.min(MAXS,(d-L)/RL));   /* dây giãn ra theo tay kéo */
+    var dx=tx-ax,dy=ty-ey,d=Math.sqrt(dx*dx+dy*dy),rmax=RL*MAXS+L;
+    if(d>rmax){tx=ax+dx/d*rmax;ty=ey+dy/d*rmax;d=rmax}
+    kt=Math.max(1,Math.min(MAXS,(d-L)/RL));
     C.px=C.x;C.py=C.y;C.x=tx;C.y=ty;
   }
-  sScale+=(kt-sScale)*(dragging?.28:.07);       /* thả tay: dây co lại đàn hồi */
+  sScale+=(kt-sScale)*(dragging?.28:.07);
   var sg=seg*sScale;
   for(var it=0;it<16;it++){
-    pts[0].x=ax;pts[0].y=anc.y;
+    pts[0].x=ax;pts[0].y=ey;
     for(var j=1;j<N;j++)solve(pts[j-1],pts[j],sg);
     C.w=dragging?0:.35;
     solve(pts[N-1],C,L);
   }
   if(!dragging){C.x=Math.max(20,Math.min(W-20,C.x));C.y=Math.min(H-10,C.y)}
   draw();
-  if(!dragging){
+  if(!dragging&&!scene){
     var mv=0;
     for(var k=0;k<all.length;k++)mv=Math.max(mv,Math.abs(all[k].x-all[k].px),Math.abs(all[k].y-all[k].py));
-    if(mv<.04&&Math.abs(sScale-1)<.002)asleep=true;
+    if(mv<.04&&Math.abs(sScale-1)<.002&&fx.sway===0)asleep=true;
   }
 }
 function draw(){
@@ -304,11 +332,23 @@ card.addEventListener('pointerup',function(e){
 card.addEventListener('pointercancel',function(){dragging=false});
 function flip(){
   if(!shown)return;
+  gsap.set(flipEl,{rotationY:gsap.getProperty(flipEl,'rotationY')%360});
   flipped=!flipped;
   gsap.to(flipEl,{rotationY:flipped?180:0,duration:.9,ease:'back.out(1.5)',overwrite:true});
   C.px-=14;asleep=false;
 }
 card.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();flip()}});
+
+/* mỗi lần sang chương mới: thẻ xoay 360° + giật dây nảy Phạmn */
+function cardKick(){
+  if(!shown||reduce)return;
+  asleep=false;
+  gsap.to(flipEl,{rotationY:'+=360',duration:1.15,ease:'back.out(1.3)',overwrite:true});
+  gsap.killTweensOf(fx,'bob');
+  gsap.timeline()
+    .to(fx,{bob:-56,duration:.16,ease:'power2.out'})
+    .to(fx,{bob:0,duration:1,ease:'elastic.out(1,.35)'});
+}
 
 function lift(){return Math.max(540,RL*1.4+380*S+60)}
 function ropeTo(show,done,dur){
@@ -328,13 +368,13 @@ function dockOut(){
   ropeTo(false,function(){
     if(shown)return;
     card.style.visibility='hidden';
-    if(flipped){flipped=false;gsap.set(flipEl,{rotationY:0})}
+    gsap.set(flipEl,{rotationY:0});flipped=false;
   },.28);
 }
 
 /* Hero KHÔNG có thẻ.
    Desktop/tablet: thẻ rơi khi vào "Về mình", ở lại đến hết "Báo chí nghe tôi...", (tuỳ chọn) rơi thêm ở "Báo chí nói gì".
-   SP: thẻ chỉ treo giữa màn hình trong cảnh "Về mình", các section khác không bị chừa chỗ. */
+   SP: thẻ chỉ treo giữa màn hình trong cảnh "Về mình". */
 function wantDock(){
   var vh=innerHeight,mob=vw()<760;
   var m=$('#ve-toi').getBoundingClientRect();
@@ -346,23 +386,47 @@ function wantDock(){
 }
 var tick=0;
 function sync(){if(tick)return;tick=1;requestAnimationFrame(function(){tick=0;wantDock()?dockIn():dockOut()})}
-
-/* cuộn trang làm thẻ lắc lư */
-var lastY=scrollY;
-addEventListener('scroll',function(){
-  var y=scrollY,dy=y-lastY;lastY=y;
-  if(shown&&!dragging&&Math.abs(dy)>1&&pts.length){
-    var imp=Math.max(-18,Math.min(18,dy*.16))*(S<1?.85:1);
-    for(var i=N-4;i<N;i++)pts[i].px-=imp*(.35+(i-(N-4))*.2);
-    C.px-=imp*1.2;
-    asleep=false;
-  }
-  sync();
-},{passive:true});
+addEventListener('scroll',sync,{passive:true});
 addEventListener('resize',sync);
 
 init();draw();
 gsap.ticker.add(step);
+
+/* ===================== VỀ MÌNH (cảnh ghim 4 chương) ===================== */
+var meEl=$('#ve-toi'),meYear=$('#meYear'),meFill=$('#meFill'),meBg=$('#meBg');
+var chs=gsap.utils.toArray('.ch');
+var COL=[['#cdbdff','#15131a'],['#ffd23f','#15131a'],['#2432f5','#f4f5f7'],['#15131a','#f4f5f7']];
+var YRS=[2017,2020,2023,2026,2026];
+var cur=-1;
+function setCh(i){
+  if(i===cur)return;
+  var first=cur<0;cur=i;
+  chs.forEach(function(c,j){
+    var on=j===i;
+    gsap.to(c,{autoAlpha:on?1:0,y:on?0:(j<i?-26:26),duration:on?.6:.35,delay:on&&!first?.12:0,ease:'power3.out',overwrite:true});
+  });
+  gsap.to(meEl,{backgroundColor:COL[i][0],color:COL[i][1],duration:.7,ease:'power2.out',overwrite:'auto'});
+  if(!first)cardKick();
+}
+if(!reduce){
+  gsap.set(chs,{autoAlpha:0,y:26});
+  var setBg=gsap.quickSetter(meBg,'xPercent');
+  var upd=function(p){
+    var q=Math.min(3.999,Math.max(0,p*4)),i=Math.floor(q),f=q-i;
+    meYear.textContent=Math.round(YRS[i]+(YRS[i+1]-YRS[i])*f);
+    meFill.style.transform='scaleX('+Math.max(0,Math.min(1,p))+')';
+    setBg(-p*50);
+    swayP=p;                 /* tiến độ cuộn điều khiển chuyển động của thẻ */
+    setCh(i);
+  };
+  upd(0);
+  ScrollTrigger.create({
+    trigger:meEl,start:'top top',end:'bottom bottom',
+    onUpdate:function(s){upd(s.progress)},
+    onToggle:function(s){meActive=s.isActive;asleep=false},
+    onRefresh:function(s){upd(s.progress);meActive=s.isActive;calcAmp()}
+  });
+}
 
 /* ===================== VỀ MÌNH (cảnh ghim 4 chương) ===================== */
 var meEl=$('#ve-toi'),meYear=$('#meYear'),meFill=$('#meFill'),meBg=$('#meBg');
